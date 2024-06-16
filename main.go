@@ -40,26 +40,35 @@ func main() {
 
 		cars[cfg.ID] = car
 		go car.ConnectCar(context.Background())
-
-		mqttClient := connectMqtt(&config.Mqtt, car)
-		car.SetupMqtt(mqttClient)
 	}
+
+	connectMqtt(&config.Mqtt, cars)
 
 	select {}
 
 }
 
-func connectMqtt(cfg *MqttConfig, car *Car) mqtt.Client {
-	opts := mqtt.NewClientOptions().AddBroker(cfg.URL).SetClientID("tesla_ble-" + car.ID())
+func connectMqtt(cfg *MqttConfig, cars map[string]*Car) mqtt.Client {
+	opts := mqtt.NewClientOptions().AddBroker(cfg.URL).SetClientID("tesla_ble-" + cfg.Prefix)
 
 	opts.SetKeepAlive(2 * time.Second)
 	opts.SetPingTimeout(1 * time.Second).
 		SetAutoReconnect(true).
 		SetResumeSubs(true).
 		SetOrderMatters(false)
-	opts.SetWill(car.TopicNameForValue(TopicConnectionStatus), "offline", 0, true)
+	opts.SetWill(cfg.Prefix+"/status", "offline", 0, true)
+
 	opts.OnConnect = func(client mqtt.Client) {
-		car.PublishStatus()
+		log.Println("MQTT connected")
+
+		for _, car := range cars {
+			car.SetupMqtt(client)
+		}
+
+		client.Publish(cfg.Prefix+"/status", 0, true, "online").Wait()
+	}
+	opts.OnConnectionLost = func(client mqtt.Client, err error) {
+		log.Println("MQTT connection lost:", err)
 	}
 
 	c := mqtt.NewClient(opts)

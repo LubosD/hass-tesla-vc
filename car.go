@@ -103,7 +103,7 @@ func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection, first
 	defer func() {
 		log.Println("VIN " + c.config.VIN + " disconnected")
 		c.connected = false
-		c.PublishStatus()
+		// c.PublishStatus()
 	}()
 
 	car, err := vehicle.NewVehicle(conn, c.skey, nil)
@@ -140,7 +140,7 @@ func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection, first
 
 	log.Println("Session started")
 	c.connected = true
-	c.PublishStatus()
+	// c.PublishStatus()
 
 	// t := time.NewTicker(time.Second * 5)
 
@@ -239,5 +239,5 @@ func (car *Car) SetupMqtt(client mqtt.Client) {
 
 	client.Publish("homeassistant/number/"+car.prefix+"_"+car.ID()+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
 
-	car.PublishStatus()
+	// car.PublishStatus()
 }
