@@ -6,7 +6,7 @@ type HassAutoconfig struct {
 	Name              string               `json:"name"`
 	StatusTopic       string               `json:"stat_t"`
 	CommandTopic      string               `json:"cmd_t,omitempty"`
-	AvailabilityTopic string               `json:"avty_t"`
+	AvailabilityTopic string               `json:"avty_t,omitempty"`
 	UniqueID          string               `json:"uniq_id"`
 	StateClass        string               `json:"stat_cla"`
 	Device            HassAutoconfigDevice `json:"dev"`

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"time"
 
@@ -15,7 +16,12 @@ import (
 	"github.com/teslamotors/vehicle-command/pkg/vehicle"
 )
 
-type CarCommand func(ctx context.Context, v *vehicle.Vehicle) error
+const MAX_ATTEMPTS = 2
+
+type CarCommand struct {
+	Attempts int
+	Op       func(ctx context.Context, v *vehicle.Vehicle) error
+}
 
 type Car struct {
 	config *CarConfig
@@ -37,7 +43,7 @@ func NewCar(config *CarConfig, prefix string) (*Car, error) {
 	return &Car{
 		config:   config,
 		skey:     skey,
-		commands: make(chan CarCommand),
+		commands: make(chan CarCommand, 20),
 		prefix:   prefix,
 	}, nil
 }
@@ -50,12 +56,16 @@ func (c *Car) IsConnected() bool {
 	return c.connected
 }
 
-func (c *Car) ConnectLoop(ctx context.Context) {
+func (c *Car) ConnectCar(ctx context.Context) {
 	for {
+		// Wait for the next command
+		log.Println("Waiting for next command for VIN " + c.config.VIN)
+		cmd := <-c.commands
+
 		log.Println("Trying to connect to VIN " + c.config.VIN)
 		conn, err := ble.NewConnection(ctx, c.config.VIN)
 		if err == nil {
-			err = c.operateConnection(ctx, conn)
+			err = c.operateConnection(ctx, conn, cmd)
 
 			log.Println("OperateConnection returned:", err)
 			conn.Close()
@@ -87,7 +97,7 @@ func (c *Car) PublishStatus() {
 	c.mqttClient.Publish(c.TopicNameForValue(TopicConnectionStatus), 0, true, statusStr).Wait()
 }
 
-func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection) error {
+func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection, firstCommand CarCommand) error {
 	log.Println("VIN " + c.config.VIN + " connected over BLE!")
 
 	defer func() {
@@ -106,6 +116,20 @@ func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection) error
 		return err
 	}
 
+	// First connect just VCSEC so we can Wakeup() the car if needed.
+	err = car.StartSession(ctx, []universalmessage.Domain{
+		protocol.DomainVCSEC,
+	})
+	if err != nil {
+		return err
+	}
+
+	err = car.Wakeup(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Then we can also connect the infotainment
 	err = car.StartSession(ctx, []universalmessage.Domain{
 		protocol.DomainVCSEC,
 		protocol.DomainInfotainment,
@@ -118,35 +142,51 @@ func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection) error
 	c.connected = true
 	c.PublishStatus()
 
-	car.PrivateKeyAvailable()
+	// t := time.NewTicker(time.Second * 5)
 
-	t := time.NewTicker(time.Second * 5)
+	err = c.executeCommand(car, ctx, &firstCommand)
+	if err != nil {
+		return err
+	}
 
 	for {
 		select {
-		case <-t.C:
-			//err := car.Ping(ctx)
-			//if err != nil {
-			//	return fmt.Errorf("ping failed: %w", err)
-			//}
-			// Ping seems to require the infotainment subsystem,
-			// which we don't want to activate.
-			err = car.Ping(ctx)
-			if err != nil {
-				return err
-			}
-			log.Println("PING OK")
+		// Disabled for now. It doesn't seem to prevent BLE timeouts on RPi :-(
+		//case <-t.C:
+		//err := car.Ping(ctx)
+		//if err != nil {
+		//	return fmt.Errorf("ping failed: %w", err)
+		//}
+		//err = car.SetChargingAmps(ctx, 5)
+		//	if err != nil {
+		//		return err
+		//	}
+		//	log.Println("PING OK")
 		case cmd, ok := <-c.commands:
 			if !ok {
 				return nil
 			}
 
-			err := cmd(ctx, car)
+			err := c.executeCommand(car, ctx, &cmd)
 			if err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (c *Car) executeCommand(car *vehicle.Vehicle, ctx context.Context, cmd *CarCommand) error {
+	err := cmd.Op(ctx, car)
+	if err != nil {
+		cmd.Attempts++
+
+		if cmd.Attempts < MAX_ATTEMPTS {
+			c.commands <- *cmd
+		}
+		return err
+	}
+
+	return nil
 }
 
 func (c *Car) TopicNameForValue(valueName string) string {
@@ -159,9 +199,9 @@ func intPtr(value int) *int {
 
 func (car *Car) SetupMqtt(client mqtt.Client) {
 	car.mqttClient = client
-	client.Subscribe(car.TopicNameForValue("charging_amps"), 0, func(c mqtt.Client, m mqtt.Message) {
+	client.Subscribe(car.TopicNameForValue("charging_amps_set"), 0, func(c mqtt.Client, m mqtt.Message) {
 		valueStr := string(m.Payload())
-		valueInt, err := strconv.Atoi(valueStr)
+		valueFloat, err := strconv.ParseFloat(valueStr, 32)
 
 		defer m.Ack()
 
@@ -170,18 +210,31 @@ func (car *Car) SetupMqtt(client mqtt.Client) {
 			return
 		}
 
-		car.PushCommand(func(ctx context.Context, v *vehicle.Vehicle) error {
-			return v.SetChargingAmps(ctx, int32(valueInt))
+		car.PushCommand(CarCommand{
+			Op: func(ctx context.Context, v *vehicle.Vehicle) error {
+				valueInt := int32(math.Round(valueFloat))
+				err := v.SetChargingAmps(ctx, valueInt)
+
+				if err == nil {
+					log.Printf("SetChargingAmps to %d OK\n", valueInt)
+					car.mqttClient.Publish(car.TopicNameForValue("charging_amps"), 0, true, strconv.Itoa(int(valueInt))).Wait()
+				}
+
+				return err
+			},
 		})
 	})
 
 	var autoconf HassAutoconfig
 	autoconf.Name = "charging_amps"
 	autoconf.StatusTopic = car.TopicNameForValue("charging_amps")
-	autoconf.CommandTopic = autoconf.StatusTopic
+	autoconf.CommandTopic = car.TopicNameForValue("charging_amps_set")
 	autoconf.UniqueID = autoconf.StatusTopic
+	autoconf.DeviceClass = "current"
 	autoconf.Max = intPtr(16)
 	autoconf.Min = intPtr(0)
+	autoconf.Device.IDs = car.prefix + "_" + car.ID()
+	autoconf.Device.Name = car.ID()
 	jsonBytes, _ := json.Marshal(&autoconf)
 
 	client.Publish("homeassistant/number/"+car.prefix+"_"+car.ID()+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
