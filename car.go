@@ -181,6 +181,7 @@ func (c *Car) executeCommand(car *vehicle.Vehicle, ctx context.Context, cmd *Car
 		cmd.Attempts++
 
 		if cmd.Attempts < MAX_ATTEMPTS {
+			// FIXME: This is wrong, it should be ordered in front
 			c.commands <- *cmd
 		}
 		return err
@@ -200,6 +201,8 @@ func intPtr(value int) *int {
 func (car *Car) SetupMqtt(client mqtt.Client) {
 	car.mqttClient = client
 	client.Subscribe(car.TopicNameForValue("charging_amps_set"), 0, func(c mqtt.Client, m mqtt.Message) {
+		log.Println("Requested to set amps to " + string(m.Payload()))
+
 		valueStr := string(m.Payload())
 		valueFloat, err := strconv.ParseFloat(valueStr, 32)
 
@@ -212,8 +215,13 @@ func (car *Car) SetupMqtt(client mqtt.Client) {
 
 		car.PushCommand(CarCommand{
 			Op: func(ctx context.Context, v *vehicle.Vehicle) error {
+				log.Println("Calling SetChargingAmps on car")
+
+				limCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+
 				valueInt := int32(math.Round(valueFloat))
-				err := v.SetChargingAmps(ctx, valueInt)
+				err := v.SetChargingAmps(limCtx, valueInt)
 
 				if err == nil {
 					log.Printf("SetChargingAmps to %d OK\n", valueInt)

@@ -49,14 +49,15 @@ func main() {
 }
 
 func connectMqtt(cfg *MqttConfig, cars map[string]*Car) mqtt.Client {
-	opts := mqtt.NewClientOptions().AddBroker(cfg.URL).SetClientID("tesla_ble-" + cfg.Prefix)
-
-	opts.SetKeepAlive(2 * time.Second)
-	opts.SetPingTimeout(1 * time.Second).
+	opts := mqtt.NewClientOptions().
+		AddBroker(cfg.URL).
+		SetClientID("tesla_ble-"+cfg.Prefix).
+		SetKeepAlive(2*time.Second).
+		SetPingTimeout(1*time.Second).
 		SetAutoReconnect(true).
 		SetResumeSubs(true).
-		SetOrderMatters(false)
-	opts.SetWill(cfg.Prefix+"/status", "offline", 0, true)
+		SetOrderMatters(false).
+		SetWill(cfg.Prefix+"/status", "offline", 0, true)
 
 	opts.OnConnect = func(client mqtt.Client) {
 		log.Println("MQTT connected")
