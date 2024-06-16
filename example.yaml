@@ -1,0 +1,7 @@
+mqtt:
+  url: tcp://192.168.0.1:1883
+  prefix: tesla-garage
+cars:
+- id: model-y
+  vin: XP7YGCELXNB000001
+  keyFile: tesla.pem
