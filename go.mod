@@ -4,13 +4,15 @@ go 1.22.3
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.4.3
-	github.com/teslamotors/vehicle-command v0.0.2
+	github.com/teslamotors/vehicle-command v0.1.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/JuulLabs-OSS/cbgo v0.0.1 // indirect
+	github.com/cronokirby/saferith v0.33.0 // indirect
 	github.com/go-ble/ble v0.0.0-20220207185428-60d1eecf2633 // indirect
+	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/mattn/go-colorable v0.1.6 // indirect
@@ -25,6 +27,6 @@ require (
 	golang.org/x/net v0.8.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.8.0 // indirect
-	google.golang.org/protobuf v1.28.1 // indirect
+	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/check.v1 v1.0.0-20200902074654-038fdea0a05b // indirect
 )

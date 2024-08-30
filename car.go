@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -63,7 +65,11 @@ func (c *Car) ConnectCar(ctx context.Context) {
 		cmd := <-c.commands
 
 		log.Println("Trying to connect to VIN " + c.config.VIN)
-		conn, err := ble.NewConnection(ctx, c.config.VIN)
+
+		limCtx, done := context.WithTimeout(ctx, 5 * time.Second)
+		conn, err := ble.NewConnection(limCtx, c.config.VIN)
+		done()
+
 		if err == nil {
 			err = c.operateConnection(ctx, conn, cmd)
 
@@ -97,8 +103,30 @@ func (c *Car) PublishStatus() {
 	c.mqttClient.Publish(c.TopicNameForValue(TopicConnectionStatus), 0, true, statusStr).Wait()
 }
 
+func detectLockup() chan any {
+	timeout := time.After(30 * time.Second)
+	rv := make(chan any)
+
+	go func() {
+		select {
+		case <-rv:
+			break
+		case <-timeout:
+			log.Println("Lockup timeout expired, will re-exec")
+			err := syscall.Exec(os.Args[0], os.Args, os.Environ())
+			if err != nil {
+				log.Println("Failed to exec itself:", err)
+			}
+		}
+	}()
+
+	return rv
+}
+
 func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection, firstCommand CarCommand) error {
 	log.Println("VIN " + c.config.VIN + " connected over BLE!")
+
+	stopLockupDetect := detectLockup()
 
 	defer func() {
 		log.Println("VIN " + c.config.VIN + " disconnected")
@@ -108,26 +136,34 @@ func (c *Car) operateConnection(ctx context.Context, conn *ble.Connection, first
 
 	car, err := vehicle.NewVehicle(conn, c.skey, nil)
 	if err != nil {
+		close(stopLockupDetect)
 		return err
 	}
 
-	err = car.Connect(ctx)
+	limctx, done := context.WithTimeout(ctx, time.Second*10)
+	defer done()
+
+	err = car.Connect(limctx)
 	if err != nil {
+		close(stopLockupDetect)
 		return err
 	}
 
 	// First connect just VCSEC so we can Wakeup() the car if needed.
-	err = car.StartSession(ctx, []universalmessage.Domain{
+	err = car.StartSession(limctx, []universalmessage.Domain{
 		protocol.DomainVCSEC,
 	})
 	if err != nil {
 		return err
 	}
 
-	err = car.Wakeup(ctx)
+	err = car.Wakeup(limctx)
 	if err != nil {
 		return err
 	}
+
+	close(stopLockupDetect)
+	done()
 
 	// Then we can also connect the infotainment
 	err = car.StartSession(ctx, []universalmessage.Domain{
